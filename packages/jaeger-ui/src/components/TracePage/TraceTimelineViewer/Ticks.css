@@ -26,6 +26,6 @@ SPDX-License-Identifier: Apache-2.0
 }
 
 .Ticks--tickLabel.isEndAnchor {
-  left: initial;
-  right: 0.25rem;
+  left: 0.25rem;
+  right: initial;
 }

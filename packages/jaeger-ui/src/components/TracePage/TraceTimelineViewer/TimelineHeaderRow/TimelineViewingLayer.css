@@ -36,13 +36,13 @@ SPDX-License-Identifier: Apache-2.0
 }
 
 .TimelineViewingLayer--dragged.isShiftDrag {
-  background-color: rgba(68, 68, 255, 0.2);
-  border-color: #44f;
+  background-color: rgba(68, 68, 255, 0.02);
+  border-color: rgba(68, 68, 255, 0.02);
 }
 
 .TimelineViewingLayer--dragged.isReframeDrag {
-  background-color: rgba(255, 68, 68, 0.2);
-  border-color: #f44;
+  background-color: rgba(255, 68, 68, 0.02);
+  border-color: rgba(255, 68, 68, 0.02);
 }
 
 .TimelineViewingLayer--fullOverlay {

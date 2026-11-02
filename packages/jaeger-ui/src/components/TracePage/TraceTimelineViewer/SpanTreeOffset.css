@@ -36,7 +36,7 @@ SPDX-License-Identifier: Apache-2.0
   /* Center on 20px box: 0.25rem + (20px / 2) - 0.5px (half of line width) */
   width: 1px;
   height: 100%;
-  background-color: color-mix(in srgb, currentColor var(--tree-chrome-strength), transparent);
+  background-color: color-mix(in srgb, currentColor 3%, transparent);
 }
 
 /* For the last ancestor (immediate parent), only show vertical line in top half */
@@ -60,7 +60,7 @@ SPDX-License-Identifier: Apache-2.0
   height: 1px;
   top: 50%;
   transform: translateY(-50%);
-  background-color: color-mix(in srgb, var(--span-line-color) var(--tree-chrome-strength), transparent);
+  background-color: color-mix(in srgb, var(--span-line-color) 4%, transparent);
 }
 
 .SpanTreeOffset--iconWrapper {
@@ -80,9 +80,9 @@ SPDX-License-Identifier: Apache-2.0
   height: 20px;
   padding: 0 4px;
   border-radius: 3px;
-  border: 1px solid color-mix(in srgb, var(--span-box-color) var(--tree-chrome-strength), transparent);
+  border: 1px solid color-mix(in srgb, var(--span-box-color) 5%, transparent);
   background-color: var(--surface-secondary);
-  color: var(--text-primary);
+  color: color-mix(in srgb, var(--text-primary) 35%, transparent);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -94,8 +94,8 @@ SPDX-License-Identifier: Apache-2.0
 .SpanTreeOffset--box.is-collapsed {
   background-color: color-mix(
     in srgb,
-    var(--span-box-color) var(--tree-chrome-fill),
-    var(--surface-secondary)
+    var(--span-box-color) 2%,
+    transparent
   );
 }
 
@@ -105,5 +105,5 @@ SPDX-License-Identifier: Apache-2.0
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: color-mix(in srgb, var(--span-box-color) var(--tree-chrome-strength), transparent);
+  background-color: color-mix(in srgb, var(--span-box-color) 4%, transparent);
 }

@@ -10,7 +10,7 @@ import { IOtelSpan } from '../../../types/otel';
 import './Ticks.css';
 
 // The last label is right-anchored so the final interval needs ~2× a single label's width.
-const MIN_LABEL_SPACING_PX = 130;
+const MIN_LABEL_SPACING_PX = 24;
 
 type TicksProps = {
   numTicks: number;

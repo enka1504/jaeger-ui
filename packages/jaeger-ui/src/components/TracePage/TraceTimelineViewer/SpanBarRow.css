@@ -78,7 +78,7 @@ SPDX-License-Identifier: Apache-2.0
 
 .span-name-wrapper {
   background: var(--surface-secondary);
-  line-height: 27px;
+  line-height: 11px;
   overflow: hidden;
   display: flex;
 }
@@ -154,6 +154,7 @@ SPDX-License-Identifier: Apache-2.0
 .span-svc-name {
   padding: 0 0.25rem 0 0.5rem;
   font-size: 1.05em;
+  color: color-mix(in srgb, var(--text-primary) 28%, transparent);
 }
 
 .span-svc-name.is-children-collapsed {
