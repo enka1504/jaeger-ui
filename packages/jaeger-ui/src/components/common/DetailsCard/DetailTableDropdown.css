@@ -1,0 +1,56 @@
+/*
+Copyright (c) 2019 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.DetailTableDropdown--Footer {
+  background: var(--surface-primary);
+  border: 1px solid var(--border-default);
+  display: flex;
+  justify-content: space-between;
+  padding: 0.3em;
+}
+
+.DetailTableDropdown--Footer--CancelConfirm {
+  display: flex;
+}
+
+.DetailTableDropdown--Btn {
+  align-items: center;
+  border-radius: 0;
+  color: var(--text-inverse);
+  display: flex;
+  padding: 0.3em 0.7em 0.3em 0.6em;
+}
+
+.DetailTableDropdown--Btn ~ .DetailTableDropdown--Btn {
+  margin-left: 0.3em;
+}
+
+.DetailTableDropdown--Btn > *:not(:first-child) {
+  margin-left: 0.3em;
+}
+
+.DetailTableDropdown--Btn.Apply {
+  background: var(--action-apply-background);
+  color: var(--action-apply-text);
+}
+
+.DetailTableDropdown--Btn.Cancel {
+  background: var(--action-cancel-background);
+  color: var(--action-cancel-text);
+}
+
+.DetailTableDropdown--Btn.Clear {
+  background: var(--feedback-error);
+}
+
+.DetailTableDropdown--Tooltip {
+  max-width: unset;
+  white-space: nowrap;
+}
+
+.DetailTableDropdown--Tooltip--Body {
+  display: flex;
+  flex-direction: column;
+}

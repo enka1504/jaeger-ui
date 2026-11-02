@@ -1,0 +1,9 @@
+/*
+Copyright (c) 2018 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.value-is-invalid {
+  background: var(--ant-color-error-bg);
+  border: 1px solid var(--feedback-error);
+}

@@ -1,0 +1,81 @@
+/*
+Copyright (c) 2021 The Jaeger Authors.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+th.header-item {
+  background: var(--surface-tertiary);
+  border-left: 1px solid var(--border-default);
+  border-top: 1px solid var(--border-default);
+  border-bottom: 1px solid var(--border-default);
+  border-radius: 0px;
+  height: 40px;
+  font-size: 14px;
+  padding: 0 10px !important;
+  border-radius: 0px !important;
+}
+
+th.header-item:last-child {
+  border-right: 1px solid var(--border-default);
+}
+
+th.header-item span {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+td.header-item {
+  height: 50px;
+  border-bottom: 1px solid var(--border-default);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 0 10px !important;
+}
+
+.table-row:hover,
+.table-row--hovered {
+  background: var(--surface-component-background-hover);
+}
+
+.ant-table-tbody > tr.ant-table-row-level-0:not(.ant-table-row-selected):hover > td,
+.ant-table-tbody > tr.table-row--hovered:not(.ant-table-row-selected) > td {
+  background: var(--surface-component-background-hover);
+}
+
+.ant-progress-inner {
+  border-radius: 0px;
+  background: var(--surface-component-background);
+}
+
+.impact {
+  padding-top: 5px;
+  padding-right: 20px;
+  height: 20px;
+}
+
+.impact .ant-progress-bg {
+  height: 12px !important;
+}
+
+.table-graph-avg {
+  align-self: center;
+  margin-left: 12px;
+}
+
+.column-container {
+  display: flex;
+}
+
+.impact-tooltip .ant-tooltip-inner {
+  word-break: keep-all;
+}
+
+.view-trace-button {
+  width: 200px;
+  height: 30px;
+}
+
+.ops-table-error-placeholder {
+  vertical-align: middle;
+  text-align: center;
+}

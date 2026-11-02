@@ -1,0 +1,42 @@
+name: PR Quota Manager
+
+on:
+  pull_request_target: # Runs with write permissions even for fork PRs
+    types: [opened, closed, reopened, synchronize] # synchronize = new commits pushed
+  workflow_dispatch:
+    inputs:
+      username:
+        description: 'GitHub username to process quota for'
+        required: true
+        type: string
+      dryRun:
+        description: 'Dry run mode - show actions without making changes'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: quota-${{ github.event.pull_request.user.login || github.event.inputs.username }}
+  cancel-in-progress: false
+
+jobs:
+  manage-quota:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process PR Quota
+        # Shared with jaegertracing/jaeger, pinned so a change there reaches this
+        # repository only when the SHA is bumped in a reviewed pull request.
+        # The action predates any release tag, so this pins a commit on that
+        # repository's main branch.
+        uses: jaegertracing/jaeger/.github/actions/pr-quota-manager@d75a722b57bd40d80dacaff17cf83192aebd33c1
+        with:
+          # The default GITHUB_TOKEN suffices: the pull_request_target trigger runs in
+          # the base repo context, so the job-level issues/pull-requests write
+          # permissions above cover labelling and commenting even on fork PRs.
+          token: ${{ github.token }}
+          username: ${{ github.event.inputs.username }}
+          dry-run: ${{ github.event.inputs.dryRun }}

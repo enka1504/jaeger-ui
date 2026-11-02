@@ -1,0 +1,359 @@
+// Copyright (c) 2023 The Jaeger Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import path from 'path';
+import fs from 'fs';
+import vm from 'vm';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+const proxyConfig = {
+  target: 'http://localhost:16686',
+  secure: false,
+  changeOrigin: true,
+  ws: true,
+  xfwd: true,
+};
+
+/**
+ * Vite plugin that emits a bundle-stats.csv with per-module size estimates.
+ *
+ * Activated by: BUNDLE_STATS=1 pnpm run build
+ *
+ * In generateBundle, it records each module's renderedLength (post-tree-shake,
+ * pre-minification) and which chunk it belongs to. In closeBundle, it reads the
+ * actual minified chunk sizes from disk and distributes each chunk's size to its
+ * modules proportionally. This gives a good approximation of each module's real
+ * contribution to the final (minified, pre-gzip) bundle.
+ *
+ * Uses only the stable generateBundle/closeBundle plugin hooks, compatible with
+ * both Vite 7 (Rollup) and Vite 8 (Rolldown).
+ */
+function bundleStatsPlugin(outDir: string) {
+  // Accumulated per-module data: module path → { renderedLength, chunkFileName }
+  const moduleData = new Map<string, { rendered: number; chunk: string }>();
+  // Accumulated per-chunk pre-minification totals
+  const chunkTotals = new Map<string, number>();
+
+  return {
+    name: 'bundle-stats-csv',
+    generateBundle(
+      _options: unknown,
+      bundle: Record<
+        string,
+        { type: string; fileName: string; modules?: Record<string, { renderedLength: number }> }
+      >
+    ) {
+      for (const [, chunk] of Object.entries(bundle)) {
+        if (chunk.type === 'chunk' && chunk.modules) {
+          let total = 0;
+          for (const [mod, info] of Object.entries(chunk.modules)) {
+            moduleData.set(mod, { rendered: info.renderedLength, chunk: chunk.fileName });
+            total += info.renderedLength;
+          }
+          chunkTotals.set(chunk.fileName, (chunkTotals.get(chunk.fileName) ?? 0) + total);
+        }
+      }
+    },
+    closeBundle() {
+      // Aggregate sizes by package name.
+      const packageSizes = new Map<string, number>();
+      for (const [rawMod, { rendered, chunk }] of moduleData) {
+        const mod = rawMod.replaceAll('\0', ''); // strips Rolldown's null-byte module prefix
+        const chunkTotal = chunkTotals.get(chunk);
+        if (!chunkTotal) continue;
+        const chunkPath = path.resolve(outDir, chunk);
+        let minifiedSize: number;
+        try {
+          minifiedSize = fs.statSync(chunkPath).size;
+        } catch {
+          continue;
+        }
+        const estimated = Math.round((rendered / chunkTotal) * minifiedSize);
+        // Extract package name from node_modules path (handles scoped packages).
+        // Non-node_modules files are grouped under the source package name.
+        const nmIdx = mod.lastIndexOf('node_modules/');
+        let pkg: string;
+        if (nmIdx !== -1) {
+          const afterNm = mod.substring(nmIdx + 'node_modules/'.length);
+          if (afterNm.startsWith('@')) {
+            // Scoped package: @scope/name
+            const parts = afterNm.split('/');
+            pkg = `${parts[0]}/${parts[1]}`;
+          } else {
+            pkg = afterNm.split('/')[0];
+          }
+        } else {
+          pkg = '<project>';
+        }
+        packageSizes.set(pkg, (packageSizes.get(pkg) ?? 0) + estimated);
+      }
+      const rows = [...packageSizes.entries()]
+        .map(([pkg, size]) => ({ pkg, size }))
+        .sort((a, b) => b.size - a.size);
+      const lines = ['package,size', ...rows.map(r => `"${r.pkg}",${r.size}`)];
+      const csvPath = path.resolve(outDir, 'bundle-stats.csv');
+      fs.writeFileSync(csvPath, lines.join('\n'));
+      console.log(`[bundle-stats] Wrote ${rows.length} packages to ${csvPath}`);
+    },
+  };
+}
+
+// The query service search-replaces its capability blob into the index.html it serves,
+// under one of these names — the second is what older backends write. Each is a flat
+// object on a single line, so a per-line match up to the closing `};` captures it.
+const BACKEND_CAPABILITY_PATTERNS = [
+  /const JAEGER_BACKEND_CAPABILITIES = (\{.*\});/,
+  /const JAEGER_STORAGE_CAPABILITIES = (\{.*\});/,
+];
+
+/**
+ * Read the capabilities the query service advertises, by asking it for the index.html it
+ * would serve in production and pulling the blob out of it.
+ *
+ * The dev server serves this repository's own index.html and proxies only the API paths,
+ * so the backend's blob never reaches the browser on its own. Without this, a developer
+ * has to restate in `jaeger-ui.config.json` what the running backend already reports.
+ *
+ * Returns null when the backend is unreachable or advertises nothing, which is the normal
+ * case for `pnpm start` with no backend running.
+ */
+async function fetchBackendCapabilities(target: string): Promise<Record<string, unknown> | null> {
+  let html: string;
+  try {
+    const response = await fetch(target, { signal: AbortSignal.timeout(2000) });
+    if (!response.ok) return null;
+    html = await response.text();
+  } catch {
+    return null;
+  }
+  for (const pattern of BACKEND_CAPABILITY_PATTERNS) {
+    const match = html.match(pattern);
+    if (!match) continue;
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      // An unreplaced pattern leaves an identifier rather than JSON; try the next name.
+    }
+  }
+  return null;
+}
+
+/**
+ * Vite plugin to inject local UI config during development.
+ * This mimics the behavior of the Go query-service which injects config into index.html.
+ *
+ * Supports two config file formats:
+ * 1. jaeger-ui.config.js - JavaScript file that exports a config object (or function returning one)
+ * 2. jaeger-ui.config.json - JSON file with config object
+ *
+ * Capabilities come from the proxied query service when it is running, and a
+ * `backendCapabilities` block in the config file overrides what it reports, so a developer
+ * can exercise a capability the backend at hand does not have.
+ *
+ * The plugin only runs in development mode (pnpm start).
+ *
+ * Security note: These config files are local to the developer's machine and are
+ * excluded from git via .gitignore. The content is injected into the HTML during
+ * development only, similar to how the Go query-service injects config in production.
+ */
+function jaegerUiConfigPlugin() {
+  const jsConfigPath = path.resolve(__dirname, 'jaeger-ui.config.js');
+  const jsonConfigPath = path.resolve(__dirname, 'jaeger-ui.config.json');
+
+  // Inject `backendCapabilities` at the JAEGER_BACKEND_CAPABILITIES swap point. Mirrors
+  // how the Jaeger backend overlays its capability blob in production.
+  function injectBackendCapabilities(html: string, capabilities: Record<string, unknown>) {
+    if (!Object.keys(capabilities).length) return html;
+    return html.replace(
+      'const JAEGER_BACKEND_CAPABILITIES = DEFAULT_BACKEND_CAPABILITIES;',
+      `const JAEGER_BACKEND_CAPABILITIES = { ...DEFAULT_BACKEND_CAPABILITIES, ...${JSON.stringify(capabilities)} };`
+    );
+  }
+
+  return {
+    name: 'jaeger-ui-config',
+    configureServer(server) {
+      server.watcher.add([jsConfigPath, jsonConfigPath]);
+      server.watcher.on('change', path => {
+        if (path === jsConfigPath || path === jsonConfigPath) {
+          console.log(`[jaeger-ui-config] Config changed: ${path}. Triggering full reload...`);
+          server.ws.send({ type: 'full-reload', path: '*' });
+        }
+      });
+    },
+    transformIndexHtml: {
+      order: 'pre' as const,
+      async handler(html: string, ctx: { server?: unknown }) {
+        // Capabilities the config file asks for, whichever file supplies them.
+        let fileCapabilities: Record<string, unknown> | undefined;
+        let loadedConfigFile = false;
+
+        // Check for JS config first (higher priority, like in Go server)
+        if (fs.existsSync(jsConfigPath)) {
+          try {
+            const jsContent = fs.readFileSync(jsConfigPath, 'utf-8');
+            // Inject the file verbatim — it must define UIConfig() itself,
+            // matching the contract enforced by the jaeger binary.
+            html = html.replace('// JAEGER_CONFIG_JS', jsContent);
+
+            // Extract capabilities from the JS config by executing it in a sandbox
+            // and calling UIConfig(), mirroring the JSON config path's special treatment.
+            try {
+              const sandbox: {
+                UIConfig?: () => { backendCapabilities?: Record<string, unknown> };
+              } = {};
+              vm.runInNewContext(jsContent, sandbox);
+              fileCapabilities = sandbox.UIConfig?.()?.backendCapabilities;
+            } catch (evalErr) {
+              console.warn('[jaeger-ui-config] Could not evaluate JS config for capabilities:', evalErr);
+            }
+
+            console.log('[jaeger-ui-config] Loaded config from jaeger-ui.config.js');
+            loadedConfigFile = true;
+          } catch (err) {
+            console.error('[jaeger-ui-config] Error loading jaeger-ui.config.js:', err);
+          }
+        }
+
+        // Check for JSON config
+        if (!loadedConfigFile && fs.existsSync(jsonConfigPath)) {
+          try {
+            const jsonContent = fs.readFileSync(jsonConfigPath, 'utf-8');
+            // Validate it's valid JSON and use stringified result for injection
+            const parsedConfig = JSON.parse(jsonContent);
+
+            // Inject the full UI config — mimics the Go server behavior for .json config files.
+            html = html.replace(
+              'const JAEGER_CONFIG = DEFAULT_CONFIG;',
+              `const JAEGER_CONFIG = ${JSON.stringify(parsedConfig)};`
+            );
+
+            fileCapabilities = parsedConfig.backendCapabilities;
+
+            console.log('[jaeger-ui-config] Loaded config from jaeger-ui.config.json');
+          } catch (err) {
+            console.error('[jaeger-ui-config] Error loading jaeger-ui.config.json:', err);
+          }
+        }
+
+        // The Go server injects capabilities via its own search-replace, separate from the
+        // UI config. The plugin replicates that here, from the running backend and from the
+        // config file, so both work with `pnpm start`. A production build has no backend to
+        // ask and gets its blob from the query service at serve time, so it only reads the
+        // config file; ctx.server tells the two modes apart.
+        const backendCapabilities = ctx.server ? await fetchBackendCapabilities(proxyConfig.target) : null;
+        if (backendCapabilities) {
+          console.log(
+            `[jaeger-ui-config] Read capabilities from ${proxyConfig.target}:`,
+            JSON.stringify(backendCapabilities)
+          );
+        }
+        return injectBackendCapabilities(html, { ...backendCapabilities, ...fileCapabilities });
+      },
+    },
+  };
+}
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  define: {
+    __REACT_APP_GA_DEBUG__: JSON.stringify(process.env.REACT_APP_GA_DEBUG || ''),
+    __REACT_APP_VSN_STATE__: JSON.stringify(process.env.REACT_APP_VSN_STATE || 'dev'),
+    __APP_ENVIRONMENT__: JSON.stringify(process.env.NODE_ENV || 'development'),
+  },
+  plugins: [
+    process.env.BUNDLE_STATS && bundleStatsPlugin(path.resolve(__dirname, 'build')),
+    jaegerUiConfigPlugin(),
+    // Suppress LightningCSS warning about ::global() pseudo-element emitted by CSS modules.
+    // This is a known issue: LightningCSS doesn't recognize the CSS modules :global() syntax.
+    {
+      name: 'suppress-lightningcss-global-warning',
+      configResolved(config) {
+        const originalWarn = config.logger.warn;
+        config.logger.warn = (msg, ...args) => {
+          if (typeof msg === 'string' && msg.includes("'global' is not recognized")) return;
+          originalWarn.call(config.logger, msg, ...args);
+        };
+      },
+    },
+    react({
+      babel: {
+        babelrc: true,
+      },
+    }),
+  ],
+  css: {
+    preprocessorOptions: {
+      less: {
+        math: 'always',
+        javascriptEnabled: true,
+      },
+    },
+  },
+  server: {
+    proxy: {
+      // Proxy jaeger-query resource paths for local development.
+      '/api': proxyConfig,
+      '/analytics': proxyConfig,
+      '/serviceedges': proxyConfig,
+      '/qualitymetrics-v2': proxyConfig,
+      // Optional proxy for AG-UI backends that run on a separate port.
+      // The assistant defaults to /api/ai/chat (covered by the /api proxy above).
+      // Override with VITE_JAEGER_AG_UI_URL=/jaeger-ag-ui and
+      // JAEGER_AG_UI_PROXY_TARGET=http://host:port only when your AG-UI
+      // backend is not co-located with the Jaeger query service.
+      '/jaeger-ag-ui': {
+        target: process.env.JAEGER_AG_UI_PROXY_TARGET || 'http://localhost:8090',
+        secure: false,
+        changeOrigin: true,
+        ws: true,
+      },
+    },
+    warmup: {
+      // Pre-transform the most-visited pages in the background on startup
+      // so cold Vite transforms don't block the first hard refresh.
+      clientFiles: [
+        './src/index.tsx',
+        './src/components/SearchTracePage/index.tsx',
+        './src/components/TracePage/index.tsx',
+      ],
+    },
+  },
+  optimizeDeps: {
+    // react-icons/tb is a 4400+ icon barrel. Vite 8 / Rolldown pre-bundles it
+    // into a single 4 MB file that Rolldown's import-analysis parser can't handle.
+    // Exclude it so Vite serves the ESM entry directly without pre-bundling.
+    exclude: ['react-icons/tb'],
+  },
+  base: './',
+  build: {
+    outDir: 'build',
+    assetsDir: 'static',
+    commonjsOptions: {
+      // Ensure we transform modules that contain a mix of ES imports
+      // and CommonJS require() calls to avoid stray require() calls in production.
+      transformMixedEsModules: true,
+    },
+  },
+  resolve: {
+    alias: {
+      // allow hot reload of Plexus code -- https://github.com/jaegertracing/jaeger-ui/pull/2089
+      // More-specific alias must come first; Vite matches the first prefix that applies.
+      '@jaegertracing/plexus/demo': path.resolve(__dirname, '../plexus/demo/src/index'),
+      '@jaegertracing/plexus': path.resolve(__dirname, '../plexus/src'),
+      // d3-flame-graph doesn't export its CSS in package.json exports field, so
+      // resolve the package via Node resolution (works regardless of how the
+      // package manager lays out node_modules) and point at the CSS directly.
+      'd3-flame-graph/dist/d3-flamegraph.css': path.join(
+        path.dirname(require.resolve('d3-flame-graph')),
+        'd3-flamegraph.css'
+      ),
+    },
+  },
+});

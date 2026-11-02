@@ -1,0 +1,15 @@
+// Copyright (c) 2019 Uber Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+// Constants for calculating circular node positioning
+export const FONT_SIZE = 14;
+export const FONT = `${FONT_SIZE}px Helvetica Nueue`;
+export const LINE_HEIGHT = 1.5;
+export const OP_PADDING_TOP = 5;
+export const PROGRESS_BAR_STROKE_WIDTH = 15;
+export const RADIUS = 75;
+export const WORD_RX = /\W*\w+\W*/g;
+
+// Used by SearchTracePage/url to truncate extremely long traceID arrays in URLs,
+// as many server clients do not handle URLs larger than this reliably.
+export const MAX_LENGTH = 7000;

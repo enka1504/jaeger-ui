@@ -1,0 +1,56 @@
+/*
+Copyright (c) 2017 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.Page--topNav {
+  height: auto;
+  padding: 0;
+  position: fixed;
+  width: 100%;
+  z-index: 11;
+  font-weight: 500;
+}
+
+.Page--content {
+  --page-nav-offset: 0px;
+  display: flex;
+  flex-direction: column;
+  left: 0;
+  min-height: calc(100% - var(--nav-height));
+  position: absolute;
+  right: 0;
+  background-color: var(--surface-primary);
+}
+
+.Page--assistantShell {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}
+
+.Page--assistantMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* When the assistant dock is open, confine trace fixed layers to the main column (see CSS spec: fixed + transform containing block). */
+.Page--assistantShell--open .Page--assistantMain {
+  transform: translateZ(0);
+}
+
+.Page--content--no-embedded {
+  --page-nav-offset: var(--nav-height);
+  top: var(--nav-height);
+}
+
+.ant-menu-dark {
+  /* same color as in Docsy theme for jaegertracing.io */
+  background-color: #1a4767;
+}

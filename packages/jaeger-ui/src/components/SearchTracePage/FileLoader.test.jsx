@@ -1,0 +1,438 @@
+// Copyright (c) 2019 Uber Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+import React from 'react';
+import { render, screen, act } from '@testing-library/react';
+import '@testing-library/jest-dom';
+
+vi.mock('../../utils/readJsonFile', () => ({
+  default: jest.fn(),
+}));
+
+vi.mock('../../model/transform-trace-data', () => ({
+  default: jest.fn(),
+}));
+
+vi.mock('../../model/trace-summary', () => ({
+  traceToTraceSummary: jest.fn(),
+}));
+
+vi.mock('../../hooks/useTraceLoading', () => ({
+  populateTraceCache: jest.fn(),
+}));
+
+vi.mock('antd', async () => {
+  const antd = await vi.importActual('antd');
+  const { Upload } = antd;
+  const MockedDragger = ({ beforeUpload, children, ...props }) => {
+    global.mockBeforeUpload = beforeUpload;
+    return (
+      <div data-testid="upload-dragger" {...props}>
+        {children}
+      </div>
+    );
+  };
+
+  return {
+    ...antd,
+    Upload: {
+      ...Upload,
+      Dragger: MockedDragger,
+    },
+    message: {
+      error: jest.fn(),
+      warning: jest.fn(),
+      success: jest.fn(),
+    },
+  };
+});
+
+import FileLoader, { loadTracesFromFile } from './FileLoader';
+import readJsonFile from '../../utils/readJsonFile';
+import transformTraceData from '../../model/transform-trace-data';
+import { traceToTraceSummary } from '../../model/trace-summary';
+import { populateTraceCache } from '../../hooks/useTraceLoading';
+import * as otelParser from '../../api/v3/parser';
+
+const makeFile = (name = 'trace.json') => new File(['{}'], name, { type: 'application/json' });
+const makeOtlpDocument = traceId => ({
+  resourceSpans: [
+    {
+      scopeSpans: [
+        {
+          spans: [
+            { traceId, spanId: '1111111111111111', startTimeUnixNano: '1000', endTimeUnixNano: '2000' },
+          ],
+        },
+      ],
+    },
+  ],
+});
+
+beforeEach(() => {
+  readJsonFile.mockClear();
+  transformTraceData.mockClear();
+  traceToTraceSummary.mockClear();
+  populateTraceCache.mockClear();
+  global.mockBeforeUpload = null;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('loadTracesFromFile', () => {
+  it('keeps other OTLP traces when the native parser returns no trace', async () => {
+    const empty = makeOtlpDocument('abcdef0123456789abcdef0123456789');
+    const good = makeOtlpDocument('1234567890abcdef1234567890abcdef');
+    const summary = { traceID: '1234567890abcdef1234567890abcdef' };
+    readJsonFile.mockResolvedValue([empty, good]);
+    vi.spyOn(otelParser, 'parseOtelTrace').mockReturnValueOnce(null);
+    traceToTraceSummary.mockReturnValueOnce(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(result).toEqual({ summaries: [summary], rawTraces: [good], errorCount: 1 });
+    expect(populateTraceCache).toHaveBeenCalledTimes(1);
+    expect(populateTraceCache).toHaveBeenCalledWith(expect.objectContaining({ traceID: summary.traceID }));
+    expect(transformTraceData).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Error', new Error('Native parser failed')],
+    ['string', 'Native parser failed'],
+  ])('reports a thrown %s and keeps other OTLP traces', async (_kind, error) => {
+    const bad = makeOtlpDocument('abcdef0123456789abcdef0123456789');
+    const good = makeOtlpDocument('1234567890abcdef1234567890abcdef');
+    const summary = { traceID: '1234567890abcdef1234567890abcdef' };
+    readJsonFile.mockResolvedValue([bad, good]);
+    vi.spyOn(otelParser, 'parseOtelTrace').mockImplementationOnce(() => {
+      throw error;
+    });
+    traceToTraceSummary.mockReturnValueOnce(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(result).toEqual({
+      summaries: [summary],
+      rawTraces: [good],
+      errorCount: 1,
+      errorDetail: 'Native parser failed',
+    });
+    expect(populateTraceCache).toHaveBeenCalledTimes(1);
+    expect(populateTraceCache).toHaveBeenCalledWith(expect.objectContaining({ traceID: summary.traceID }));
+    expect(transformTraceData).not.toHaveBeenCalled();
+  });
+
+  it('returns summaries and raw traces for a valid { data: [...] } file', async () => {
+    const rawTrace = { traceID: 'abc', spans: [] };
+    const otelTrace = { traceID: 'abc' };
+    const summary = { traceID: 'abc', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue({ data: [rawTrace] });
+    transformTraceData.mockReturnValue({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(transformTraceData).toHaveBeenCalledWith(rawTrace);
+    expect(populateTraceCache).toHaveBeenCalledWith(otelTrace);
+    expect(traceToTraceSummary).toHaveBeenCalledWith(otelTrace);
+    expect(result).toEqual({ summaries: [summary], rawTraces: [rawTrace], errorCount: 0 });
+  });
+
+  it('normalizes a top-level array (no data wrapper)', async () => {
+    const rawTrace = { traceID: 'abc', spans: [], result: { unrelated: true } };
+    const otelTrace = { traceID: 'abc' };
+    const summary = { traceID: 'abc', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue([rawTrace]);
+    transformTraceData.mockReturnValue({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(transformTraceData).toHaveBeenCalledWith(rawTrace);
+    expect(result).toEqual({ summaries: [summary], rawTraces: [rawTrace], errorCount: 0 });
+  });
+
+  it('normalizes parsed.data single object into an array', async () => {
+    const rawTrace = { traceID: 'abc', spans: [] };
+    const otelTrace = { traceID: 'abc' };
+    const summary = { traceID: 'abc', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue({ data: rawTrace });
+    transformTraceData.mockReturnValue({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(transformTraceData).toHaveBeenCalledWith(rawTrace);
+    expect(result).toEqual({ summaries: [summary], rawTraces: [rawTrace], errorCount: 0 });
+  });
+
+  it('normalizes a top-level object with no data property', async () => {
+    const rawTrace = { traceID: 'abc', spans: [] };
+    const otelTrace = { traceID: 'abc' };
+    const summary = { traceID: 'abc', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue(rawTrace);
+    transformTraceData.mockReturnValue({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(transformTraceData).toHaveBeenCalledWith(rawTrace);
+    expect(result).toEqual({ summaries: [summary], rawTraces: [rawTrace], errorCount: 0 });
+  });
+
+  it('counts traces where transformTraceData returns null as errors', async () => {
+    const rawTrace = { traceID: 'bad' };
+    readJsonFile.mockResolvedValue({ data: [rawTrace] });
+    transformTraceData.mockReturnValue(null);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(result).toEqual({ summaries: [], rawTraces: [], errorCount: 1 });
+  });
+
+  it('counts traces where transformTraceData throws as errors, continues with remaining traces', async () => {
+    const badTrace = { traceID: 'bad' };
+    const goodTrace = { traceID: 'good', spans: [] };
+    const otelTrace = { traceID: 'good' };
+    const summary = { traceID: 'good', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue({ data: [badTrace, goodTrace] });
+    transformTraceData
+      .mockImplementationOnce(() => {
+        throw new Error('transform failed');
+      })
+      .mockReturnValueOnce({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(result).toEqual({ summaries: [summary], rawTraces: [goodTrace], errorCount: 1 });
+  });
+
+  it('returns zero errorCount and empty summaries for an empty data array', async () => {
+    readJsonFile.mockResolvedValue({ data: [] });
+
+    const result = await loadTracesFromFile(makeFile());
+
+    expect(result).toEqual({ summaries: [], rawTraces: [], errorCount: 0 });
+  });
+});
+
+describe('<FileLoader />', () => {
+  const mockOnTracesLoaded = jest.fn();
+
+  beforeEach(() => {
+    mockOnTracesLoaded.mockClear();
+  });
+
+  it('renders the file upload area', () => {
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    expect(screen.getByText('Click or drag files to this area.')).toBeInTheDocument();
+    expect(screen.getByText('JSON files containing one or more traces are supported.')).toBeInTheDocument();
+  });
+
+  it('beforeUpload returns false to prevent default upload', async () => {
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    readJsonFile.mockResolvedValue({ data: [] });
+
+    const file = makeFile();
+    let result;
+    await act(async () => {
+      result = global.mockBeforeUpload(file);
+    });
+    expect(result).toBe(false);
+  });
+
+  it('calls onTracesLoaded after successful parse', async () => {
+    const rawTrace = { traceID: 'abc', spans: [] };
+    const otelTrace = { traceID: 'abc' };
+    const summary = { traceID: 'abc', traceName: 'svc: op' };
+
+    readJsonFile.mockResolvedValue({ data: [rawTrace] });
+    transformTraceData.mockReturnValue({ asOtelTrace: () => otelTrace });
+    traceToTraceSummary.mockReturnValue(summary);
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    const file = makeFile();
+    await act(async () => {
+      global.mockBeforeUpload(file);
+    });
+
+    expect(mockOnTracesLoaded).toHaveBeenCalledWith([summary], [rawTrace]);
+  });
+
+  it('shows error message when traces fail to parse', async () => {
+    const { message } = await import('antd');
+    readJsonFile.mockResolvedValue({ data: [{ traceID: 'bad' }, { traceID: 'bad2' }] });
+    transformTraceData.mockImplementation(() => {
+      throw new Error('fail');
+    });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('traces.json'));
+    });
+
+    expect(message.error).toHaveBeenCalledWith(expect.stringContaining('2 traces'));
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('includes the validation reason when an OTLP upload is rejected', async () => {
+    const { message } = await import('antd');
+    readJsonFile.mockResolvedValue({
+      resourceSpans: [
+        {
+          scopeSpans: [
+            {
+              spans: [
+                {
+                  traceId: 'abcdef0123456789abcdef0123456789',
+                  spanId: 'invalid',
+                  startTimeUnixNano: '1000000',
+                  endTimeUnixNano: '2000000',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('otlp.json'));
+    });
+
+    expect(message.error).toHaveBeenCalledWith(
+      '1 OTLP document could not be loaded from otlp.json: Invalid span ID: must be 16-char hex string and not all zeros (at resourceSpans.0.scopeSpans.0.spans.0.spanId)'
+    );
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('counts a rejected multi-trace OTLP document once and reports legacy failures separately', async () => {
+    const { message } = await import('antd');
+    const invalid = makeOtlpDocument('abcdef0123456789abcdef0123456789');
+    invalid.resourceSpans[0].scopeSpans[0].spans.push({
+      traceId: '1234567890abcdef1234567890abcdef',
+      spanId: 'invalid',
+      startTimeUnixNano: '1000',
+      endTimeUnixNano: '2000',
+    });
+    readJsonFile.mockResolvedValue([invalid, { traceID: 'bad' }]);
+    transformTraceData.mockReturnValueOnce(null);
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('mixed.json'));
+    });
+
+    expect(message.error).toHaveBeenCalledWith(
+      '1 OTLP document and 1 trace could not be loaded from mixed.json. First rejected OTLP document: Invalid span ID: must be 16-char hex string and not all zeros (at resourceSpans.0.scopeSpans.0.spans.1.spanId)'
+    );
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('reports multiple rejected OTLP documents without counting their spans as traces', async () => {
+    const { message } = await import('antd');
+    readJsonFile.mockResolvedValue([{ resourceSpans: null }, { resourceSpans: null }]);
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('invalid.json'));
+    });
+
+    expect(message.error).toHaveBeenCalledWith(
+      expect.stringMatching(/^2 OTLP documents could not be loaded/)
+    );
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('shows warning when file contains no traces', async () => {
+    const { message } = await import('antd');
+    readJsonFile.mockResolvedValue({ data: [] });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('empty.json'));
+    });
+
+    expect(message.warning).toHaveBeenCalledWith(expect.stringContaining('empty.json'));
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('shows error message when file cannot be parsed', async () => {
+    const { message } = await import('antd');
+    readJsonFile.mockRejectedValue(new Error('not valid JSON'));
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(makeFile('bad.json'));
+    });
+
+    expect(message.error).toHaveBeenCalledWith(expect.stringContaining('not valid JSON'));
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [100 * 1024 * 1024 + 1, '100.1'],
+    [150 * 1024 * 1024, '150.0'],
+  ])('rejects a file of %d bytes before reading it and reports %s MB', async (size, sizeMb) => {
+    const { message } = await import('antd');
+    const file = makeFile('huge.json');
+    Object.defineProperty(file, 'size', { value: size });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    let result;
+    await act(async () => {
+      result = global.mockBeforeUpload(file);
+    });
+
+    expect(result).toBe(false);
+    expect(message.error).toHaveBeenCalledWith(
+      `huge.json is ${sizeMb} MB, which exceeds the 100 MB upload limit.`
+    );
+    expect(readJsonFile).not.toHaveBeenCalled();
+    expect(mockOnTracesLoaded).not.toHaveBeenCalled();
+  });
+
+  it('reads a file of exactly 100 MB', async () => {
+    readJsonFile.mockResolvedValue({ data: [] });
+    const file = makeFile('limit.json');
+    Object.defineProperty(file, 'size', { value: 100 * 1024 * 1024 });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    await act(async () => {
+      global.mockBeforeUpload(file);
+    });
+
+    expect(readJsonFile).toHaveBeenCalledWith({ file });
+  });
+
+  it('each beforeUpload call processes only its own file (no N² duplication)', async () => {
+    const rawTrace = { traceID: 'a', spans: [] };
+    readJsonFile.mockResolvedValue({ data: [rawTrace] });
+    transformTraceData.mockReturnValue({ asOtelTrace: () => ({ traceID: 'a' }) });
+    traceToTraceSummary.mockReturnValue({ traceID: 'a' });
+
+    render(<FileLoader onTracesLoaded={mockOnTracesLoaded} />);
+    const file1 = makeFile('trace1.json');
+    const file2 = makeFile('trace2.json');
+
+    await act(async () => {
+      global.mockBeforeUpload(file1);
+    });
+    await act(async () => {
+      global.mockBeforeUpload(file2);
+    });
+
+    expect(readJsonFile).toHaveBeenCalledTimes(2);
+    expect(readJsonFile).toHaveBeenNthCalledWith(1, { file: file1 });
+    expect(readJsonFile).toHaveBeenNthCalledWith(2, { file: file2 });
+  });
+});

@@ -1,0 +1,143 @@
+/*
+Copyright (c) 2018 The Jaeger Authors.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.TraceGraph--experimental {
+  background-color: #a00;
+  color: #fff;
+  position: absolute;
+  padding: 1px 15px;
+}
+
+.TraceGraph--graphWrapper {
+  background: var(--surface-primary);
+  bottom: 0;
+  cursor: move;
+  left: 0;
+  overflow: auto;
+  position: absolute;
+  right: 0;
+  top: 0;
+  transition: background 0.5s ease;
+  display: flex;
+}
+
+.TraceGraph--graphWrapper.is-uiFind-mode {
+  background: var(--surface-secondary);
+}
+
+.TraceGraph--sidebar-container {
+  background: var(--surface-secondary);
+  display: flex;
+  z-index: 1;
+}
+
+.TraceGraph--menu {
+  border-left: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-default);
+  cursor: pointer;
+  padding: 0.8rem;
+}
+
+.TraceGraph--menu > li {
+  list-style-type: none;
+  text-align: center;
+  padding-bottom: 0.3rem;
+}
+
+.TraceGraph--sidebar {
+  cursor: default;
+  box-shadow: -1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.TraceGraph--help-content > div {
+  margin-top: 1rem;
+}
+
+/* Legend sample edge lines and labels — same theme-aware colors as the real graph edges */
+.TraceGraph--legendLine {
+  stroke: var(--text-secondary);
+  stroke-width: 2;
+}
+
+.TraceGraph--legendLine.is-nonBlocking {
+  stroke-dasharray: 4;
+}
+
+/* SVG text default fill is black; override so labels stay readable in dark mode */
+.TraceGraph--legendText {
+  fill: var(--text-primary);
+}
+
+.TraceGraph--dag {
+  stroke-width: 0.8;
+}
+
+/*
+  Theme-aware edge lines and arrowheads so they stay visible in dark mode.
+  Scoped to the edge path and the arrowhead marker's child shape (rather than
+  the .TraceGraph--dag container) so inherited stroke/fill cannot restyle nodes,
+  borders, overlays, or other <defs> primitives (clipPaths, masks, gradients).
+*/
+.TraceGraph--dag .plexus-Digraph--SvgEdge {
+  stroke: var(--text-secondary);
+  /* A sub-1px stroke anti-aliases into near-invisibility against a dark
+     background, even with sufficient color contrast. Widen to 1.5 so
+     the edges read clearly without being heavy. */
+  stroke-width: 1.5;
+}
+
+.TraceGraph--dag marker * {
+  fill: var(--text-secondary);
+}
+
+/* DAG minimap */
+
+.TraceGraph--miniMap {
+  align-items: flex-end;
+  bottom: 1rem;
+  display: flex;
+  left: 1rem;
+  position: absolute;
+  z-index: 1;
+}
+
+.TraceGraph--miniMap > .plexus-MiniMap--item {
+  border: 1px solid var(--border-default);
+  background: var(--surface-tertiary);
+  box-shadow: 0px 0px 5px rgba(0, 0, 0, 0.3);
+  margin-right: 1rem;
+  position: relative;
+}
+
+.TraceGraph--miniMap > .plexus-MiniMap--map {
+  /* dynamic widht, height */
+  box-sizing: content-box;
+  cursor: not-allowed;
+}
+
+.TraceGraph--miniMap .plexus-MiniMap--mapActive {
+  /* dynamic: width, height, transform */
+  background: var(--surface-secondary);
+  position: absolute;
+}
+
+.TraceGraph--miniMap > .plexus-MiniMap--button {
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 1.6em;
+  line-height: 0;
+  padding: 0.1rem;
+}
+
+.TraceGraph--miniMap > .plexus-MiniMap--button:hover {
+  background: var(--surface-tertiary);
+}
+
+.TraceGraph--menu .ant-btn.active {
+  background-color: var(--interactive-primary);
+  color: white;
+  border-color: var(--interactive-primary);
+}

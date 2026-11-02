@@ -1,0 +1,264 @@
+// Copyright (c) 2018 The Jaeger Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+import '@testing-library/jest-dom';
+import React from 'react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { LayoutManager } from '@jaegertracing/plexus';
+import transformTraceData from '../../../model/transform-trace-data';
+import TraceGraph, { setOnEdgePath } from './TraceGraph';
+import { MODE_SERVICE, MODE_TIME, MODE_SELFTIME } from './OpNode';
+import testTrace from './testTrace.json';
+
+vi.mock('@jaegertracing/plexus', () => {
+  const DEFAULT_MODE = 'service';
+
+  const MockDigraph = ({ children, layers, ...props }) => {
+    const nodeLayer = layers.find(layer => layer.key === 'nodes');
+    const mode = nodeLayer?.renderNode?.toString().includes('trace-graph/nodes/render/')
+      ? nodeLayer.renderNode.toString().match(/trace-graph\/nodes\/render\/([^)]+)/)[1]
+      : DEFAULT_MODE;
+
+    const domProps = Object.entries(props).reduce((acc, [key, value]) => {
+      if (typeof value === 'boolean') {
+        acc[key] = value.toString();
+      } else if (typeof value === 'object' || typeof value === 'function') {
+        return acc;
+      } else {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
+    return (
+      <div data-testid="mock-digraph" data-mode={mode} {...domProps}>
+        {children}
+      </div>
+    );
+  };
+
+  MockDigraph.propsFactories = {
+    classNameIsSmall: () => ({ className: 'is-small' }),
+    scaleOpacity: () => ({ opacity: 1 }),
+    scaleStrokeOpacity: () => ({ strokeOpacity: 1 }),
+  };
+
+  const MockLayoutManager = jest.fn().mockImplementation(function () {
+    return { stopAndRelease: jest.fn() };
+  });
+
+  const mockCacheAs = (key, fn) => {
+    const cachedFn = (...args) => fn(...args);
+    Object.defineProperty(cachedFn, 'toString', {
+      value: () => key,
+      configurable: true,
+    });
+    return cachedFn;
+  };
+
+  return {
+    Digraph: MockDigraph,
+    LayoutManager: MockLayoutManager,
+    cacheAs: mockCacheAs,
+  };
+});
+
+const transformedTrace = transformTraceData(testTrace);
+
+describe('<TraceGraph>', () => {
+  let props;
+
+  beforeEach(() => {
+    props = {
+      headerHeight: 60,
+      trace: transformedTrace.asOtelTrace(),
+      onSearchResults: vi.fn(),
+    };
+  });
+
+  it('does not explode', () => {
+    render(<TraceGraph {...props} />);
+    expect(screen.getByTestId('mock-digraph')).toBeInTheDocument();
+    expect(document.querySelectorAll('.TraceGraph--menu').length).toBe(1);
+    expect(screen.getAllByRole('button').length).toBe(3);
+  });
+
+  it('switches node mode when clicking mode buttons', async () => {
+    render(<TraceGraph {...props} />);
+
+    // Initial mode should be service
+    expect(screen.getByTestId('mock-digraph')).toHaveAttribute('data-mode', MODE_SERVICE);
+    const timeButton = screen.getByRole('button', { name: 'Color by total time' });
+    const selftimeButton = screen.getByRole('button', { name: 'Color by self time' });
+    const serviceButton = screen.getByRole('button', { name: 'Color by service' });
+
+    // Initial aria-pressed: only service is active
+    expect(serviceButton).toHaveAttribute('aria-pressed', 'true');
+    expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+    expect(selftimeButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Switch to time
+    await userEvent.click(timeButton);
+    expect(screen.getByTestId('mock-digraph')).toHaveAttribute('data-mode', MODE_TIME);
+    expect(timeButton).toHaveAttribute('aria-pressed', 'true');
+    expect(serviceButton).toHaveAttribute('aria-pressed', 'false');
+    expect(selftimeButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Switch to selftime
+    await userEvent.click(selftimeButton);
+    expect(screen.getByTestId('mock-digraph')).toHaveAttribute('data-mode', MODE_SELFTIME);
+    expect(selftimeButton).toHaveAttribute('aria-pressed', 'true');
+    expect(serviceButton).toHaveAttribute('aria-pressed', 'false');
+    expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+
+    // Switch back to service
+    await userEvent.click(serviceButton);
+    expect(screen.getByTestId('mock-digraph')).toHaveAttribute('data-mode', MODE_SERVICE);
+    expect(serviceButton).toHaveAttribute('aria-pressed', 'true');
+    expect(timeButton).toHaveAttribute('aria-pressed', 'false');
+    expect(selftimeButton).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('shows help', async () => {
+    render(<TraceGraph {...props} />);
+    const helpIcon = screen.getByTestId('help-icon');
+    await userEvent.click(helpIcon);
+
+    // Verify help table structure
+    const tables = screen.getAllByRole('table');
+    const helpTable = tables.find(table => table.classList.contains('OpNode--legendNode'));
+    expect(helpTable).toHaveClass('OpNode', 'OpNode--legendNode');
+
+    // Verify table headers
+    expect(screen.getByText('Count / Error')).toBeInTheDocument();
+    expect(screen.getByText('Duration')).toBeInTheDocument();
+    expect(screen.getByText('Operation')).toBeInTheDocument();
+    const selfTimeCells = screen.getAllByText('Self time');
+    expect(selfTimeCells).toHaveLength(2); // One in table header, one in explanation
+
+    // Verify mode descriptions
+    const modeTable = tables.find(table => !table.classList.contains('OpNode--legendNode'));
+    expect(modeTable).toBeInTheDocument();
+
+    // Verify service mode
+    const serviceTexts = screen.getAllByText('Service');
+    expect(serviceTexts).toHaveLength(2); // One in table header, one in mode description
+    expect(screen.getByText('Colored by service')).toBeInTheDocument();
+
+    // Verify time mode
+    expect(screen.getByText('Time')).toBeInTheDocument();
+    expect(screen.getByText('Colored by total time')).toBeInTheDocument();
+
+    // Verify selftime mode
+    expect(screen.getByText('Selftime')).toBeInTheDocument();
+    expect(screen.getByText('Colored by self time (*)')).toBeInTheDocument();
+
+    // Verify edge type explanations
+    expect(screen.getByText('ChildOf')).toBeInTheDocument();
+    expect(screen.getByText('Non-Blocking')).toBeInTheDocument();
+
+    // Verify self time explanation
+    const helpContent = screen.getByTestId('help-content');
+    const selfTimeExplanation = helpContent.querySelector('div:last-child');
+    expect(selfTimeExplanation).toHaveTextContent(
+      '(*) Self time is the total time spent in a span when it was not waiting on children'
+    );
+    expect(selfTimeExplanation).toHaveTextContent(
+      'a 10ms span with two 4ms non-overlapping children would have self-time = 10ms - 2 * 4ms = 2ms'
+    );
+  });
+
+  it('hides help', async () => {
+    render(<TraceGraph {...props} />);
+    const helpIcon = screen.getByTestId('help-icon');
+    await userEvent.click(helpIcon);
+    const closeButton = screen.getByRole('button', { name: 'Close' });
+    await userEvent.click(closeButton);
+    expect(screen.queryByTestId('help-content')).not.toBeInTheDocument();
+  });
+
+  it('uses stroke-dash edges for isNonBlocking', () => {
+    const edge = { from: 0, to: 1, isNonBlocking: true };
+    expect(setOnEdgePath(edge)).toEqual({ strokeDasharray: 4 });
+
+    const edge2 = { from: 0, to: 1, isNonBlocking: false };
+    expect(setOnEdgePath(edge2)).toEqual({});
+  });
+
+  describe('onSearchResults', () => {
+    // Vertex keys for testTrace.json: service1/op1 root with service1 and service2 descendants.
+    const service1Keys = [
+      'service1\top1',
+      'service1\top1\vservice1\top2\t__LEAF__',
+      'service1\top1\vservice1\top3',
+      'service1\top1\vservice1\top4',
+      'service1\top1\vservice1\top6',
+      'service1\top1\vservice1\top6\vservice1\top7\t__LEAF__',
+    ];
+
+    const lastReported = () => props.onSearchResults.mock.lastCall[0];
+
+    it('reports null when uiFind is not provided', () => {
+      render(<TraceGraph {...props} useOtelTerms={false} />);
+
+      expect(lastReported()).toBeNull();
+    });
+
+    it('reports the matching vertex keys when uiFind is provided', () => {
+      render(<TraceGraph {...props} uiFind="service1" useOtelTerms={false} />);
+
+      const lastCall = lastReported();
+      expect(lastCall).toBeInstanceOf(Set);
+      expect([...lastCall].sort()).toEqual([...service1Keys].sort());
+    });
+
+    it('excludes vertices without matching members', () => {
+      render(<TraceGraph {...props} uiFind="op1" useOtelTerms={false} />);
+
+      const lastCall = lastReported();
+      expect([...lastCall].sort()).toEqual(
+        ['service1\top1', 'service1\top1\vservice1\top3\vservice2\top1'].sort()
+      );
+    });
+  });
+
+  it('handles uiFind mode correctly', () => {
+    const propsWithUiFind = {
+      ...props,
+      uiFind: 'test-service',
+    };
+    render(<TraceGraph {...propsWithUiFind} />);
+    const wrapper = screen.getByTestId('mock-digraph').parentElement;
+    expect(wrapper).toHaveClass('is-uiFind-mode');
+  });
+
+  it('initializes with correct default mode', () => {
+    render(<TraceGraph {...props} />);
+    expect(screen.getByTestId('mock-digraph')).toHaveAttribute('data-mode', MODE_SERVICE);
+  });
+
+  it('renders experimental link with correct attributes', () => {
+    render(<TraceGraph {...props} />);
+    const experimentalLink = screen.getByText('Experimental');
+    expect(experimentalLink).toHaveAttribute('href', 'https://github.com/jaegertracing/jaeger-ui/issues/293');
+    expect(experimentalLink).toHaveAttribute('target', '_blank');
+    expect(experimentalLink).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('handles layout manager initialization', () => {
+    const propsWithConfig = {
+      ...props,
+      traceGraphConfig: {
+        layoutManagerMemory: 1024,
+      },
+    };
+    render(<TraceGraph {...propsWithConfig} />);
+    expect(screen.getByTestId('mock-digraph')).toBeInTheDocument();
+    expect(LayoutManager).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totalMemory: 1024,
+      })
+    );
+  });
+});

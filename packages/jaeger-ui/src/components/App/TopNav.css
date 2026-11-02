@@ -1,0 +1,66 @@
+/*
+Copyright (c) 2017 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.TopNav {
+  display: flex;
+  justify-content: space-between;
+}
+
+.TopNav--askArea {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.Dropdown--icon-container {
+  display: flex;
+  color: var(--text-inverse);
+  margin-right: 30px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+}
+
+.Dropdown--icon-container:hover {
+  color: var(--text-inverse);
+}
+
+.Dropdown--icon-container .Dropdown--icon {
+  margin-left: 5px;
+}
+
+.Menu--item .ant-menu-title-content {
+  color: var(--text-inverse);
+}
+
+/* Ensure nav links are always visible on dark nav */
+.Menu--item .ant-menu-title-content a {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.Menu--item .ant-menu-title-content a:hover {
+  color: #fff;
+}
+
+.Menu--item.ant-menu-item-selected .ant-menu-title-content a {
+  color: #fff;
+}
+
+.Menu--item.ant-menu-horizontal > .ant-menu-overflow-item-rest > .ant-menu-submenu-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.Menu--item--left {
+  flex: 1 1 0;
+  min-width: 3rem;
+}
+
+.Menu--item--right {
+  flex: 0 1 auto;
+  min-width: 0;
+}

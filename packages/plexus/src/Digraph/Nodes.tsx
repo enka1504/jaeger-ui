@@ -1,0 +1,45 @@
+// Copyright (c) 2019 Uber Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+import * as React from 'react';
+
+import Node from './Node';
+import { TLayerType, TNodeRenderer, TRendererUtils } from './types';
+import { TLayoutVertex } from '../types';
+import { isSamePropSetter } from './utils';
+
+type TProps<T = {}> = TNodeRenderer<T> & {
+  getClassName: (name: string) => string;
+  layerType: TLayerType;
+  layoutVertices: TLayoutVertex<T>[];
+  renderNode: NonNullable<TNodeRenderer<T>['renderNode']>;
+  renderUtils: TRendererUtils;
+};
+
+function Nodes<T = {}>(props: TProps<T>) {
+  const { getClassName, layoutVertices, renderUtils, layerType, renderNode, setOnNode } = props;
+  return layoutVertices.map(lv => (
+    <Node
+      key={lv.vertex.key}
+      getClassName={getClassName}
+      layerType={layerType}
+      layoutVertex={lv}
+      renderNode={renderNode}
+      renderUtils={renderUtils}
+      setOnNode={setOnNode}
+    />
+  ));
+}
+
+export const areEqual = <T,>(prevProps: TProps<T>, nextProps: TProps<T>) => {
+  return (
+    prevProps.renderNode === nextProps.renderNode &&
+    prevProps.getClassName === nextProps.getClassName &&
+    prevProps.layerType === nextProps.layerType &&
+    prevProps.layoutVertices === nextProps.layoutVertices &&
+    prevProps.renderUtils === nextProps.renderUtils &&
+    isSamePropSetter(prevProps.setOnNode, nextProps.setOnNode)
+  );
+};
+
+export default React.memo(Nodes, areEqual) as unknown as typeof Nodes;

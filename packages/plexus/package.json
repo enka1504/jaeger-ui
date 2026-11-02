@@ -1,0 +1,42 @@
+{
+  "name": "@jaegertracing/plexus",
+  "private": true,
+  "license": "Apache-2.0",
+  "version": "0.2.0",
+  "description": "Directed Graph React component",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jaegertracing/jaeger-ui.git",
+    "directory": "packages/plexus"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/react": "^16.3.1",
+    "@types/d3-selection": "^3.0.11",
+    "@types/d3-zoom": "3.0.8",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitest/coverage-v8": "5.0.5",
+    "antd": "6.6.1",
+    "identity-obj-proxy": "3.0.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "vitest": "5.0.5"
+  },
+  "peerDependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "dependencies": {
+    "@viz-js/viz": "3.31.0",
+    "d3-selection": "3.0.0",
+    "d3-zoom": "3.0.0",
+    "memoize-one": "6.0.0",
+    "react-icons": "5.7.0"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "coverage": "vitest run --coverage",
+    "test": "vitest run"
+  }
+}

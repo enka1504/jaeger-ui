@@ -1,0 +1,451 @@
+// Copyright (c) 2017 Uber Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+import React from 'react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
+import '@testing-library/jest-dom';
+import TracePageHeaderWithRef, {
+  TracePageHeaderFn as TracePageHeader,
+  HEADER_ITEMS,
+} from './TracePageHeader';
+import traceGenerator from '../../../demo/trace-generators';
+import { getTraceName } from '../../../model/trace-display-helpers';
+import transformTraceData from '../../../model/transform-trace-data';
+import { ETraceViewType } from '../types';
+import * as getConfigModule from '../../../utils/config/get-config';
+
+vi.mock('./AltViewOptions', () => {
+  return mockDefault(function MockAltViewOptions(props) {
+    return <div data-testid="alt-view-options" {...props} />;
+  });
+});
+
+vi.mock('./TraceViewSettings', () => {
+  return mockDefault(function MockTraceViewSettings(props) {
+    return <div data-testid="trace-view-settings" {...props} />;
+  });
+});
+
+vi.mock('./SpanGraph', () => {
+  return mockDefault(function MockSpanGraph(props) {
+    return <div data-testid="span-graph" {...props} />;
+  });
+});
+
+vi.mock('./TracePageSearchBar', () => {
+  return mockDefault(function MockTracePageSearchBar(props) {
+    return <div data-testid="trace-page-search-bar" {...props} />;
+  });
+});
+
+vi.mock('../../common/LabeledList', () => {
+  return mockDefault(function MockLabeledList(props) {
+    return (
+      <div data-testid="labeled-list" className={props.className}>
+        {props.items &&
+          props.items.map((item, index) => (
+            <div key={item.key || index} className="horizontal item" data-testid={`header-item-${item.key}`}>
+              <span>{item.label}</span>
+              <span>{item.value}</span>
+            </div>
+          ))}
+      </div>
+    );
+  });
+});
+
+vi.mock('../../common/TraceName', () => {
+  return mockDefault(function MockTraceName({ traceName }) {
+    return (
+      <span data-testid="trace-name" data-trace-name={traceName}>
+        {traceName}
+      </span>
+    );
+  });
+});
+
+vi.mock('../../common/ExternalLinks', () => {
+  return mockDefault(function MockExternalLinks({ links }) {
+    return <div data-testid="external-links" data-links-count={links.length} />;
+  });
+});
+
+vi.mock('../../common/NewWindowIcon', () => {
+  return mockDefault(function MockNewWindowIcon({ isLarge }) {
+    return <span data-testid="new-window-icon" data-large={isLarge} />;
+  });
+});
+
+vi.mock('../../../model/link-patterns', () => ({
+  getTraceLinks: jest.fn(() => []),
+}));
+
+const renderWithRouter = component => {
+  return render(<MemoryRouter>{component}</MemoryRouter>);
+};
+
+describe('<TracePageHeader>', () => {
+  const trace = transformTraceData(traceGenerator.trace({}));
+  const mockRef = React.createRef();
+
+  const defaultProps = {
+    trace: trace.asOtelTrace(),
+    canCollapse: false,
+    clearSearch: jest.fn(),
+    detailPanelMode: 'inline',
+    enableSidePanel: false,
+    focusUiFindMatches: jest.fn(),
+    hideMap: false,
+    hideSummary: false,
+    linkToStandalone: '/standalone',
+    nextResult: jest.fn(),
+    onArchiveClicked: jest.fn(),
+    onDetailPanelModeToggle: jest.fn(),
+    onSlimViewClicked: jest.fn(),
+    onTimelineToggle: jest.fn(),
+    onTraceViewChange: jest.fn(),
+    prevResult: jest.fn(),
+    resultCount: 0,
+    showArchiveButton: false,
+    showStandaloneLink: false,
+    disableJsonView: false,
+    showViewOptions: false,
+    slimView: false,
+    textFilter: '',
+    timelineBarsVisible: true,
+    toSearch: null,
+    viewType: ETraceViewType.TraceTimelineViewer,
+    updateNextViewRangeTime: jest.fn(),
+    updateViewRangeTime: jest.fn(),
+    viewRange: { time: { current: [0, 1] } },
+    forwardedRef: mockRef,
+    updateTextFilter: jest.fn(),
+  };
+
+  let wrapper;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    wrapper = renderWithRouter(<TracePageHeader {...defaultProps} />);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders a <header />', () => {
+    const headers = document.querySelectorAll('header');
+    expect(headers).toHaveLength(1);
+  });
+
+  it('renders collapsible title and triggers onSlimViewClicked on click', () => {
+    const onSlimViewClicked = jest.fn();
+
+    renderWithRouter(<TracePageHeader {...defaultProps} canCollapse onSlimViewClicked={onSlimViewClicked} />);
+
+    const clickableTitle = screen.getByRole('switch');
+    expect(clickableTitle).toBeInTheDocument();
+
+    clickableTitle.click();
+    expect(onSlimViewClicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders an empty <div> if a trace is not present', () => {
+    const { container } = renderWithRouter(<TracePageHeader {...defaultProps} trace={null} />);
+    expect(container.children).toHaveLength(0);
+  });
+
+  it('renders the trace title', () => {
+    const traceNameElement = screen.getByTestId('trace-name');
+    expect(traceNameElement).toHaveAttribute('data-trace-name', getTraceName(trace.spans));
+  });
+
+  it('renders the header items', () => {
+    HEADER_ITEMS.forEach(item => {
+      const renderedValue = item.renderer(defaultProps.trace);
+      if (renderedValue === null) return;
+
+      const headerItem = screen.getByTestId(`header-item-${item.key}`);
+      expect(headerItem).toHaveClass('horizontal');
+      expect(headerItem).toHaveClass('item');
+      if (item.label !== null) expect(headerItem).toHaveTextContent(item.label);
+
+      if (typeof renderedValue === 'string' || typeof renderedValue === 'number') {
+        expect(headerItem).toHaveTextContent(renderedValue.toString());
+      }
+    });
+  });
+
+  it('renders the incomplete item when the trace has orphan spans', () => {
+    const incompleteTrace = Object.create(defaultProps.trace);
+    Object.defineProperty(incompleteTrace, 'orphanSpanCount', { value: 3 });
+    const { getByTestId } = renderWithRouter(<TracePageHeader {...defaultProps} trace={incompleteTrace} />);
+
+    const incompleteItem = getByTestId('header-item-incomplete');
+    expect(incompleteItem).toBeInTheDocument();
+    expect(incompleteItem).toHaveTextContent('Incomplete');
+  });
+
+  it('keeps the reload action visible when the summary is collapsed', () => {
+    const incompleteTrace = Object.create(defaultProps.trace);
+    Object.defineProperty(incompleteTrace, 'orphanSpanCount', { value: 3 });
+    const onReloadTrace = jest.fn();
+    const onSlimViewClicked = jest.fn();
+    const { container } = renderWithRouter(
+      <TracePageHeader
+        {...defaultProps}
+        trace={incompleteTrace}
+        slimView
+        canCollapse
+        onReloadTrace={onReloadTrace}
+        onSlimViewClicked={onSlimViewClicked}
+      />
+    );
+
+    expect(container.querySelector('.TracePageHeader--overviewItems')).toBeNull();
+    const button = screen.getByRole('button', { name: 'Reload trace' });
+    expect(button.closest('h1')).not.toBeNull();
+    expect(screen.getByRole('switch')).not.toContainElement(button);
+    expect(screen.getByTestId('header-item-incomplete').closest('h1')).toBe(button.closest('h1'));
+    fireEvent.click(button);
+    expect(onReloadTrace).toHaveBeenCalledOnce();
+    expect(onSlimViewClicked).not.toHaveBeenCalled();
+  });
+
+  it.each(['{Enter}', ' '])('activates the title switch and reload independently with %s', async key => {
+    const user = userEvent.setup();
+    const incompleteTrace = Object.create(defaultProps.trace);
+    Object.defineProperty(incompleteTrace, 'orphanSpanCount', { value: 3 });
+    const onReloadTrace = jest.fn();
+    const onSlimViewClicked = jest.fn();
+    renderWithRouter(
+      <TracePageHeader
+        {...defaultProps}
+        canCollapse
+        trace={incompleteTrace}
+        onReloadTrace={onReloadTrace}
+        onSlimViewClicked={onSlimViewClicked}
+      />
+    );
+
+    const titleSwitch = screen.getByRole('switch');
+    const reloadButton = screen.getByRole('button', { name: 'Reload trace' });
+    expect(titleSwitch.tagName).toBe('BUTTON');
+    expect(titleSwitch).not.toContainElement(reloadButton);
+    expect(titleSwitch.querySelector('button, a, [role="button"], [tabindex]')).toBeNull();
+    titleSwitch.focus();
+    await user.keyboard(key);
+    expect(onSlimViewClicked).toHaveBeenCalledOnce();
+    expect(onReloadTrace).not.toHaveBeenCalled();
+
+    reloadButton.focus();
+    await user.keyboard(key);
+    expect(onReloadTrace).toHaveBeenCalledOnce();
+    expect(onSlimViewClicked).toHaveBeenCalledOnce();
+  });
+
+  it('disables the reload action while a reload is in flight', () => {
+    const incompleteTrace = Object.create(defaultProps.trace);
+    Object.defineProperty(incompleteTrace, 'orphanSpanCount', { value: 3 });
+    const onReloadTrace = jest.fn();
+    renderWithRouter(
+      <TracePageHeader
+        {...defaultProps}
+        trace={incompleteTrace}
+        onReloadTrace={onReloadTrace}
+        reloadingTrace
+      />
+    );
+
+    const button = screen.getByRole('button', { name: /Reload trace/ });
+    expect(button).toHaveClass('ant-btn-loading');
+    fireEvent.click(button);
+    expect(onReloadTrace).not.toHaveBeenCalled();
+  });
+
+  it('hides the reload action when no reload handler is provided', () => {
+    const incompleteTrace = Object.create(defaultProps.trace);
+    Object.defineProperty(incompleteTrace, 'orphanSpanCount', { value: 3 });
+    renderWithRouter(<TracePageHeader {...defaultProps} trace={incompleteTrace} />);
+
+    expect(screen.getByTestId('header-item-incomplete')).toHaveTextContent('Incomplete');
+    expect(screen.queryByRole('button', { name: 'Reload trace' })).not.toBeInTheDocument();
+  });
+
+  it('does not render the incomplete item when the trace has no orphan spans', () => {
+    expect(screen.queryByTestId('header-item-incomplete')).not.toBeInTheDocument();
+  });
+
+  it('renders the GenAI calls item when the trace has GenAI spans', () => {
+    const genAITrace = Object.create(defaultProps.trace);
+    Object.defineProperty(genAITrace, 'isGenAITrace', { value: true });
+    const { getByTestId } = renderWithRouter(<TracePageHeader {...defaultProps} trace={genAITrace} />);
+
+    expect(getByTestId('header-item-genai-calls')).toBeInTheDocument();
+  });
+
+  it('does not render the GenAI calls item when the trace has no GenAI spans', () => {
+    expect(screen.queryByTestId('header-item-genai-calls')).not.toBeInTheDocument();
+  });
+
+  it('renders a <SpanGraph>', () => {
+    const spanGraphs = screen.getAllByTestId('span-graph');
+    expect(spanGraphs).toHaveLength(1);
+  });
+
+  describe('observes the visibility toggles for various UX elements', () => {
+    it('hides the minimap when hideMap === true', () => {
+      expect(screen.getByTestId('span-graph')).toBeInTheDocument();
+
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} hideMap />
+        </MemoryRouter>
+      );
+      expect(screen.queryByTestId('span-graph')).not.toBeInTheDocument();
+    });
+
+    it('hides the summary when hideSummary === true', () => {
+      expect(screen.getByTestId('labeled-list')).toBeInTheDocument();
+
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} hideSummary />
+        </MemoryRouter>
+      );
+      expect(screen.queryByTestId('labeled-list')).not.toBeInTheDocument();
+    });
+
+    it('toggles the archive button', () => {
+      const onArchiveClicked = jest.fn();
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} onArchiveClicked={onArchiveClicked} showArchiveButton />
+        </MemoryRouter>
+      );
+
+      const archiveButtons = screen.getAllByText('Archive Trace');
+      expect(archiveButtons).toHaveLength(1);
+
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} onArchiveClicked={onArchiveClicked} showArchiveButton={false} />
+        </MemoryRouter>
+      );
+      expect(screen.queryByText('Archive Trace')).not.toBeInTheDocument();
+    });
+
+    it('always renders <TraceViewSettings />', () => {
+      expect(screen.getByTestId('trace-view-settings')).toBeInTheDocument();
+    });
+
+    it('toggles <AltViewOptions />', () => {
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} showViewOptions />
+        </MemoryRouter>
+      );
+      expect(screen.getByTestId('alt-view-options')).toBeInTheDocument();
+
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} showViewOptions={false} />
+        </MemoryRouter>
+      );
+      expect(screen.queryByTestId('alt-view-options')).not.toBeInTheDocument();
+    });
+
+    it('renders the link to search', () => {
+      expect(screen.queryAllByRole('link')).toHaveLength(0);
+
+      const toSearch = 'some-link';
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} toSearch={toSearch} />
+        </MemoryRouter>
+      );
+      const links = screen.getAllByRole('link');
+      expect(links).toHaveLength(1);
+      expect(links[0]).toHaveAttribute('href', `/${toSearch}`);
+    });
+
+    it('toggles the standalone link with accessible aria-label', () => {
+      const linkToStandalone = 'some-link';
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} linkToStandalone={linkToStandalone} showStandaloneLink />
+        </MemoryRouter>
+      );
+
+      const link = screen.getByRole('link', { name: 'Open trace in a new window' });
+      expect(link).toBeInTheDocument();
+      expect(screen.getAllByRole('link')).toHaveLength(1);
+      expect(link).toHaveAttribute('href', `/${linkToStandalone}`);
+      expect(link).toHaveAttribute('aria-label', 'Open trace in a new window');
+
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} linkToStandalone={linkToStandalone} showStandaloneLink={false} />
+        </MemoryRouter>
+      );
+      expect(screen.queryAllByRole('link')).toHaveLength(0);
+    });
+
+    it('renders standalone link without "in a new window" when forbidNewPage is true', () => {
+      vi.spyOn(getConfigModule, 'default').mockReturnValue({ forbidNewPage: true });
+      const linkToStandalone = 'some-link';
+      wrapper.rerender(
+        <MemoryRouter>
+          <TracePageHeader {...defaultProps} linkToStandalone={linkToStandalone} showStandaloneLink />
+        </MemoryRouter>
+      );
+
+      const link = screen.getByRole('link', { name: 'Open trace' });
+      expect(link).toBeInTheDocument();
+      expect(screen.getAllByRole('link')).toHaveLength(1);
+      expect(link).toHaveAttribute('href', `/${linkToStandalone}`);
+      expect(link).toHaveAttribute('aria-label', 'Open trace');
+      expect(link).toHaveAttribute('target', '');
+    });
+  });
+  describe('<TracePageHeaderWithRef>', () => {
+    it('renders default export (forwardRef wrapper) correctly', () => {
+      const props = {
+        trace,
+        canCollapse: false,
+        clearSearch: jest.fn(),
+        focusUiFindMatches: jest.fn(),
+        hideMap: false,
+        hideSummary: false,
+        linkToStandalone: '/standalone',
+        nextResult: jest.fn(),
+        onArchiveClicked: jest.fn(),
+        onSlimViewClicked: jest.fn(),
+        onTraceViewChange: jest.fn(),
+        prevResult: jest.fn(),
+        resultCount: 0,
+        showArchiveButton: false,
+        showStandaloneLink: false,
+        disableJsonView: false,
+        showViewOptions: false,
+        slimView: false,
+        textFilter: '',
+        toSearch: null,
+        viewType: ETraceViewType.TraceTimelineViewer,
+        updateNextViewRangeTime: jest.fn(),
+        updateViewRangeTime: jest.fn(),
+        viewRange: { time: { current: [0, 1] } },
+        ref: mockRef,
+      };
+
+      renderWithRouter(<TracePageHeaderWithRef {...props} />);
+      expect(
+        screen
+          .getAllByTestId('trace-name')
+          .some(el => el.getAttribute('data-trace-name') === props.trace.traceName)
+      ).toBe(true);
+    });
+  });
+});

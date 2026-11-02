@@ -1,0 +1,13 @@
+/*
+Copyright (c) 2018 Uber Technologies, Inc.
+SPDX-License-Identifier: Apache-2.0
+*/
+
+.TraceDiff--graphWrapper {
+  background: var(--surface-secondary);
+  bottom: 0;
+  left: 0;
+  position: fixed;
+  right: 0;
+  top: calc(var(--page-nav-offset, var(--nav-height)) + var(--trace-diff-header-height, 0px));
+}
